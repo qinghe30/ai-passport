@@ -47,6 +47,7 @@ typedef struct {
     badge_rec_state_t rec;
     bool net_up;             // Wi-Fi 已连接(拿到 IP)
     bool has_creds;          // NVS 中已有 Wi-Fi 凭据(决定配网页是否可用)
+    bool discard_pending;    // 本次收尾是"丢弃":REC_SAVED 后不触发同步
 } badge_model_t;
 
 // 处理一个事件:变更模型并带回需要执行的动作。

@@ -1,4 +1,7 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
+# 数字工牌布局:factory 6.25MB(含中文 UI 字体),storage 1.6875MB FAT 用于
+# 离线录音缓存(16kHz/16bit/单声道约 52 秒 PCM),两分区恰好铺满 8MB Flash。
 nvs,      data, nvs,     0x9000,   0x6000,
 phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x7f0000,
+factory,  app,  factory, 0x10000,  0x640000,
+storage,  data, fat,     0x650000, 0x1b0000,

@@ -25,8 +25,8 @@ static void test_clip_utf8_respects_boundaries(void)
 {
     // "会议沟通" 每个汉字 3 字节;"A" 1 字节。
     char out[16];
-    // 目标 10 字节:可容纳 "会议" (6 字节) + NUL,"通" 放不下(6+3+1>10)。
-    badge_fmt_clip_utf8("会议沟通", out, 10);
+    // 目标 9 字节:可容纳 "会议" (6 字节) + NUL,"通" 放不下(6+3+1>9)。
+    badge_fmt_clip_utf8("会议沟通", out, 9);
     assert(strcmp(out, "会议") == 0);
     // 恰好放下:6+3+1 == 10。
     badge_fmt_clip_utf8("会议通", out, 10);
@@ -37,11 +37,19 @@ static void test_clip_utf8_respects_boundaries(void)
     // 空目标尺寸安全。
     badge_fmt_clip_utf8("会议", out, 1);
     assert(out[0] == '\0');
-    // 截断后仍是合法 UTF-8:不含残缺续字节。
+    // 截断后仍是合法 UTF-8:从首字节逐字符解码,每个序列都完整落在串内。
     badge_fmt_clip_utf8("跟进客户张三丰", out, 8);
     size_t len = strlen(out);
-    unsigned char tail = (unsigned char)out[len - 1];
-    assert((tail & 0xC0) != 0x80);               // 结尾不是孤立续字节
+    size_t i = 0;
+    while (i < len) {
+        unsigned char lead = (unsigned char)out[i];
+        size_t seq = 1;
+        if ((lead & 0xE0) == 0xC0) seq = 2;
+        else if ((lead & 0xF0) == 0xE0) seq = 3;
+        else if ((lead & 0xF8) == 0xF0) seq = 4;
+        assert(i + seq <= len);                  // 不含残缺的半截序列
+        i += seq;
+    }
     printf("ok: utf8 clipping\n");
 }
 

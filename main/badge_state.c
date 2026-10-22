@@ -12,6 +12,7 @@ bool badge_model_handle(badge_model_t *m, badge_event_t ev, badge_action_t *out)
             // 快捷发起录音:在线则实时上传,离线则写 Flash 缓存。
             m->rec = m->net_up ? BADGE_REC_STREAMING : BADGE_REC_OFFLINE;
             m->page = BADGE_PAGE_RECORD;
+            m->discard_pending = false;
             action = BADGE_ACT_START_REC;
             changed = true;
         } else if (m->page == BADGE_PAGE_RECORD &&
@@ -45,6 +46,7 @@ bool badge_model_handle(badge_model_t *m, badge_event_t ev, badge_action_t *out)
                    (m->rec == BADGE_REC_STREAMING || m->rec == BADGE_REC_OFFLINE)) {
             // 取消录音:丢弃本次数据并收尾。
             m->rec = BADGE_REC_SAVING;
+            m->discard_pending = true;
             action = BADGE_ACT_CANCEL_REC;
             changed = true;
         }
@@ -85,9 +87,11 @@ bool badge_model_handle(badge_model_t *m, badge_event_t ev, badge_action_t *out)
             m->rec = BADGE_REC_IDLE;
             m->page = BADGE_PAGE_HOME;
             changed = true;
-            if (m->net_up) {
+            // 丢弃的录音不触发同步;正常保存且在线时才补传/刷新。
+            if (m->net_up && !m->discard_pending) {
                 action = BADGE_ACT_SYNC_NOW;
             }
+            m->discard_pending = false;
         }
         break;
 
