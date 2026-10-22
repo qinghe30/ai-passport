@@ -6,9 +6,13 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
-// 顺序写入句柄(内容不透明,禁止跨任务并发使用)。
-typedef struct badge_store_writer badge_store_writer_t;
+// 顺序写入句柄(调用方按值持有,禁止跨任务并发使用;
+// fp 由 badge_store_open/close 内部维护,调用方不要直接访问)。
+typedef struct badge_store_writer {
+    FILE *fp;
+} badge_store_writer_t;
 
 // 挂载 storage 分区。失败(含首次需要格式化)时自动尝试格式化后重挂一次;
 // 仍失败则 badge_store_ready() 为 false,录音仅允许在线流式上传。

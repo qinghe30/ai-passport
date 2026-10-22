@@ -14,11 +14,11 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
              fatfs wear_levelling esp_http_client json
+    PRIV_REQUIRES mbedtls efuse
 )
 
 # 数字工牌(badge)模块源文件。
 target_sources(${COMPONENT_LIB} PRIVATE
-    "badge_config.c"
     "badge_state.c"
     "badge_fmt.c"
     "badge_blufi_security.c"

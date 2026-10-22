@@ -50,5 +50,6 @@ CONFIG_BT_NIMBLE_NVS_PERSIST=n
 # --- BluFi 配网 ---
 # badge_wifi 经 BluFi(EspBlufi 小程序)接收 Wi-Fi 凭据;安全方案 0/1 由
 # badge_blufi_security 实现,方案 1 的 DH 协商需要 MBEDTLS_DHM_C。
-CONFIG_ESP_BLUFI_ENABLE=y
+# NimBLE 主机栈下 BLUFI 的开关是 BT_NIMBLE_BLUFI_ENABLE(默认 n)。
+CONFIG_BT_NIMBLE_BLUFI_ENABLE=y
 CONFIG_MBEDTLS_DHM_C=y

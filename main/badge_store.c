@@ -11,6 +11,7 @@
 #include <dirent.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static const char *TAG = "badge_store";
 
@@ -72,9 +73,7 @@ bool badge_store_ready(void)
     return s_ready;
 }
 
-struct badge_store_writer {
-    FILE *fp;
-};
+// struct badge_store_writer 定义在 badge_store.h 中(调用方需按值持有句柄)。
 
 esp_err_t badge_store_open(char *name, size_t name_size, badge_store_writer_t *w)
 {
