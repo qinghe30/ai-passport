@@ -44,3 +44,8 @@ esp_err_t bsp_audio_read(void *pcm, size_t bytes);
 
 // 输出音量 0..100(%)。
 void bsp_audio_set_volume(uint8_t percent);
+
+// 释放 codec 与 I2S 通道占用的内存(录音结束后调用,为 BLE 配网/网络请求让出堆)。
+// 调用前必须停止所有 PCM 读写;未初始化时直接返回成功。释放后再次使用需重新
+// 调用 bsp_audio_init() + bsp_audio_set_format()。
+esp_err_t bsp_audio_deinit(void);

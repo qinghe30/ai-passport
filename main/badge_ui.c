@@ -86,7 +86,7 @@ static lv_obj_t *s_home_sync;        // 待机页"待同步 N 条"
 static lv_obj_t *s_rec_dot;          // 录音红点
 static lv_obj_t *s_rec_state;        // 录音状态(20px)
 static lv_obj_t *s_rec_mode;         // 落点提示(16px)
-static lv_obj_t *s_rec_time;         // 时长 MM:SS(20px)
+static lv_obj_t *s_rec_time;         // 时长 MM:SS / H:MM:SS(20px)
 static lv_obj_t *s_tasks_sub;        // "N 条待办"
 static lv_obj_t *s_tasks_list;       // 任务行容器(可滚动)
 static lv_obj_t *s_tasks_empty;      // 空态提示
@@ -431,7 +431,7 @@ static void render_record_live(void)
     lv_label_set_text(s_rec_mode, streaming ? T_STREAMING : T_OFFLINE);
     lv_obj_set_style_text_color(s_rec_mode, streaming ? C_GREEN : C_AMBER, 0);
 
-    char buf[8];
+    char buf[12];   // 最长 "23:59:59" 加结尾 NUL
     badge_fmt_duration(badge_record_duration_ms(), buf, sizeof(buf));
     lv_label_set_text(s_rec_time, buf);
 }
@@ -621,6 +621,9 @@ void badge_ui_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     if (!key_to_event(btn, ev, &event)) {
         return;
     }
+    // 诊断:确认按键事件确实到达 UI 层。
+    ESP_LOGI(TAG, "按键 btn=%d ev=%d event=%d 当前页=%d",
+             (int)btn, (int)ev, (int)event, (int)s_model.page);
 
     badge_action_t action = BADGE_ACT_NONE;
     badge_page_t prev_page;
@@ -647,7 +650,10 @@ void badge_ui_key(bsp_btn_t btn, bsp_btn_ev_t ev)
 
     // 页面进入/离开配网模式(BLE 启停较慢,在锁外执行)。
     if (s_model.page == BADGE_PAGE_PROVISION && prev_page != BADGE_PAGE_PROVISION) {
-        if (badge_wifi_provisioning_start() != ESP_OK) {
+        ESP_LOGI(TAG, "进入配网页,启动 BluFi 蓝牙");
+        esp_err_t perr = badge_wifi_provisioning_start();
+        ESP_LOGI(TAG, "BluFi 启动结果: %s", esp_err_to_name(perr));
+        if (perr != ESP_OK) {
             if (bsp_lvgl_lock(500)) {
                 toast(BADGE_PAGE_PROVISION, T_PROV_FAIL);
                 bsp_lvgl_unlock();
@@ -716,5 +722,12 @@ void badge_ui_init(void)
     refresh_provision();
     lv_screen_load(s_screens[BADGE_PAGE_HOME]);
     s_poller = lv_timer_create(poll_cb, 500, NULL);
+
+    // 诊断:打印 LVGL 内存池余量,页面构建耗尽内存会导致控件创建失败(白屏)。
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    ESP_LOGI(TAG, "LVGL 内存: 空闲 %u / 共 %u 字节, 最大连续块 %u, 碎片 %u%%",
+             (unsigned)mon.free_size, (unsigned)mon.total_size,
+             (unsigned)mon.free_biggest_size, (unsigned)mon.frag_pct);
     bsp_lvgl_unlock();
 }

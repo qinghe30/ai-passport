@@ -17,6 +17,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -40,6 +41,7 @@ typedef struct {
     volatile bool stop;        // 请求子任务收尾
     volatile bool discard;     // 收尾时丢弃未发数据
     volatile bool delivered;   // 本次会话数据完整送达
+    volatile bool opened;      // HTTP 连接已建立
     volatile bool running;
     size_t sent_bytes;
 } stream_session_t;
@@ -204,7 +206,8 @@ static esp_err_t replay_one_file(const char *name, size_t bytes)
         ESP_LOGW(TAG, "补传连接失败: %s", esp_err_to_name(err));
         goto out;
     }
-    esp_http_client_fetch_headers(client);
+    // 这里不能提前读响应头:请求体还没发,服务器要收完整个 body 才会回响应,
+    // 提前 fetch 会一直阻塞到超时,补传必然失败。
 
     char *chunk = heap_caps_malloc(REPLAY_CHUNK, MALLOC_CAP_8BIT);
     if (!chunk) goto out;
@@ -273,6 +276,22 @@ static void stream_url(char *buf, unsigned size)
     snprintf(buf, size, "%s/api/recordings/stream", BADGE_SERVER_URL);
 }
 
+// 写一个 HTTP 分块(chunked)帧:<十六进制长度>\r\n<数据>\r\n。
+// esp_http_client_write 在 chunked 模式下只发原始字节、不加分块帧,
+// 因此这里自行封装,后台才能按 Transfer-Encoding: chunked 正确解析。
+// 整帧必须一次写出:若拆成"分块头/数据/分块尾"三次写,会产生两个只有几字节的
+// TCP 小段;lwIP 的发送队列(TCP_SND_QUEUELEN, 16 段)会很快被小段占满,
+// 之后 send 一直等不到可写(实测录制约 1 秒、发送约 6KB 后卡死 10 秒)。
+static bool stream_write_chunk(esp_http_client_handle_t client, char *frame,
+                               const char *data, size_t len)
+{
+    int n = snprintf(frame, 16, "%x\r\n", (unsigned)len);
+    memcpy(frame + n, data, len);
+    memcpy(frame + n + len, "\r\n", 2);
+    int total = n + (int)len + 2;
+    return esp_http_client_write(client, frame, total) == total;
+}
+
 static void stream_task(void *arg)
 {
     (void)arg;
@@ -305,18 +324,32 @@ static void stream_task(void *arg)
 
     s->delivered = false;
     bool opened = esp_http_client_open(client, -1) == ESP_OK;   // -1 => chunked
-    if (opened) esp_http_client_fetch_headers(client);
-
+    s->opened = opened;   // 供录音任务判断连接是否已就绪
+    // 分块上传时不能在这里 fetch_headers:此时请求体尚未发出,服务器不会立刻回响应,
+    // 该调用会一直阻塞到超时,期间采集侧写入全部堆积(表现为"上传缓冲拥塞 0/N")。
+    // 响应头在收尾阶段(发完数据后)再读。
     char *chunk = heap_caps_malloc(BADGE_CHUNK_SAMPLES * 2, MALLOC_CAP_8BIT);
-    bool ok = opened && chunk;
+    // 整帧缓冲:分块头(最多 15 字节)+ PCM + 分块尾 CRLF,一次写出。
+    char *frame = heap_caps_malloc(BADGE_CHUNK_SAMPLES * 2 + 16, MALLOC_CAP_8BIT);
+    bool ok = opened && chunk && frame;
+    if (!opened) {
+        ESP_LOGE(TAG, "流式连接失败: %s", url);
+    } else if (!chunk || !frame) {
+        ESP_LOGE(TAG, "流式缓冲分配失败");
+    } else {
+        ESP_LOGI(TAG, "流式上传已开始: %s", url);
+        // 诊断:录音期间 Wi-Fi/lwIP 需要内部 RAM,余量不足会导致发送长期不推进。
+        ESP_LOGI(TAG, "流式开始时: 空闲堆 %u, 内部最大块 %u",
+                 (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    }
 
     while (ok) {
         size_t got = xStreamBufferReceive(s->buf, chunk,
                                           BADGE_CHUNK_SAMPLES * 2,
                                           pdMS_TO_TICKS(100));
         if (got > 0) {
-            int w = esp_http_client_write(client, chunk, (int)got);
-            if (w < 0 || (size_t)w != got) {
+            if (!stream_write_chunk(client, frame, chunk, got)) {
                 ESP_LOGW(TAG, "流式写入失败(网络中断)");
                 ok = false;
                 break;
@@ -325,22 +358,24 @@ static void stream_task(void *arg)
         }
         if (s->stop) {
             if (!s->discard) {
-                // 收尾:排干缓冲剩余数据后结束(服务器以连接关闭为完成信号)。
+                // 收尾:排干缓冲剩余数据,再发结束块 0\r\n\r\n,服务器据此判定上传完成。
                 while ((got = xStreamBufferReceive(s->buf, chunk,
                                                    BADGE_CHUNK_SAMPLES * 2, 0)) > 0) {
-                    int w = esp_http_client_write(client, chunk, (int)got);
-                    if (w < 0) { ok = false; break; }
+                    if (!stream_write_chunk(client, frame, chunk, got)) {
+                        ok = false;
+                        break;
+                    }
                     s->sent_bytes += got;
                 }
-                if (ok) {
+                if (ok && esp_http_client_write(client, "0\r\n\r\n", 5) == 5) {
                     esp_http_client_fetch_headers(client);
                     int status = esp_http_client_get_status_code(client);
-                    s->delivered = (status >= 200 && status < 300) ||
-                                   (s->sent_bytes > 0 && status == 0);
+                    s->delivered = (status >= 200 && status < 300);
                     ESP_LOGI(TAG, "流式收尾: sent=%u HTTP=%d",
                              (unsigned)s->sent_bytes, status);
                 }
             } else {
+                // 丢弃:不发结束块,直接断开,服务器按不完整上传处理。
                 ESP_LOGI(TAG, "录音取消:丢弃已缓冲数据");
             }
             break;
@@ -348,6 +383,7 @@ static void stream_task(void *arg)
     }
 
     if (chunk) free(chunk);
+    if (frame) free(frame);
     if (opened) {
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
@@ -366,12 +402,20 @@ esp_err_t badge_upload_stream_begin(void)
     if (xSemaphoreTake(s_up.session_lock, 0) != pdTRUE) {
         return ESP_ERR_INVALID_STATE;   // 已有会话
     }
+    // done 信号量跨会话复用:流式任务可能因网络中断自行退出,那时调用方无法
+    // 安全删除该信号量(任务可能正好在 give),所以只在首次创建,不随会话销毁。
+    SemaphoreHandle_t done = s_up.session.done;
     memset(&s_up.session, 0, sizeof(s_up.session));
+    s_up.session.done = done ? done : xSemaphoreCreateBinary();
+    if (s_up.session.done) {
+        xSemaphoreTake(s_up.session.done, 0);   // 清掉上次会话可能残留的令牌
+    }
     s_up.session.buf = xStreamBufferCreate(BADGE_STREAM_BUFFER_BYTES, 1);
-    s_up.session.done = xSemaphoreCreateBinary();
     if (!s_up.session.buf || !s_up.session.done) {
         if (s_up.session.buf) vStreamBufferDelete(s_up.session.buf);
         if (s_up.session.done) vSemaphoreDelete(s_up.session.done);
+        s_up.session.buf = NULL;
+        s_up.session.done = NULL;
         xSemaphoreGive(s_up.session_lock);
         return ESP_ERR_NO_MEM;
     }
@@ -380,6 +424,8 @@ esp_err_t badge_upload_stream_begin(void)
                     &s_up.session.task) != pdPASS) {
         vStreamBufferDelete(s_up.session.buf);
         vSemaphoreDelete(s_up.session.done);
+        s_up.session.buf = NULL;
+        s_up.session.done = NULL;
         s_up.session.running = false;
         xSemaphoreGive(s_up.session_lock);
         return ESP_ERR_NO_MEM;
@@ -403,18 +449,21 @@ esp_err_t badge_upload_stream_write(const void *pcm, size_t bytes)
 esp_err_t badge_upload_stream_end(bool discard)
 {
     stream_session_t *s = &s_up.session;
-    if (!s->running) return ESP_ERR_INVALID_STATE;
+    if (!s->running) {
+        // 会话已自行结束(如网络中断导致流式任务退出):必须交还会话锁,
+        // 否则后续再也建立不了新会话,断网恢复后无法续传。
+        s->task = NULL;
+        xSemaphoreGive(s_up.session_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
     s->stop = true;
     s->discard = discard;
     bool finished = xSemaphoreTake(s->done, pdMS_TO_TICKS(15000)) == pdTRUE;
-    if (s->task && finished) {
-        vTaskDelete(s->task);   // 子任务已在挂起点,句柄仍有效
-        s->task = NULL;
-    }
-    if (s->done) {
-        vSemaphoreDelete(s->done);
-        s->done = NULL;
-    }
+    // 收尾工作(删除流缓冲、置 running=false)由流式任务自己完成后以 vTaskDelete(NULL)
+    // 退出。调用方不能再 vTaskDelete(s->task),否则同一个 TCB 被释放两次,
+    // 空闲任务清理终止链表时会 uxListRemove 崩溃(Guru Meditation: Load access fault)。
+    // done 信号量跨会话复用,不在此删除(见 badge_upload_stream_begin)。
+    s->task = NULL;
     xSemaphoreGive(s_up.session_lock);
     if (!finished) {
         ESP_LOGE(TAG, "流式收尾超时");
@@ -426,6 +475,12 @@ esp_err_t badge_upload_stream_end(bool discard)
 bool badge_upload_stream_delivered(void)
 {
     return s_up.session.delivered;
+}
+
+int badge_upload_stream_state(void)
+{
+    if (!s_up.session.running) return 0;
+    return s_up.session.opened ? 2 : 1;
 }
 
 // --- 常驻同步 worker ---

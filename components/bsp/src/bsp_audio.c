@@ -430,6 +430,17 @@ fail:
     return e;
 }
 
+// 释放 codec 与 I2S 通道,把这段内存还给系统堆。
+// 用途:录音结束后立刻回收,BLE 配网与 HTTP 上传都需要大块连续堆;
+// 保留 I2S 通道会让配网时 NimBLE 启动后几乎没有余量。
+esp_err_t bsp_audio_deinit(void) {
+    if (s_codec_release_failed) return ESP_ERR_INVALID_STATE;
+    if (!s_initialized) return ESP_OK;
+    audio_cleanup();
+    ESP_LOGI(TAG, "音频资源已释放");
+    return ESP_OK;
+}
+
 esp_err_t bsp_audio_set_format(uint32_t hz, uint8_t bits, uint8_t ch) {
     if (!s_initialized) return ESP_ERR_INVALID_STATE;
     if (s_sleeping) return ESP_ERR_INVALID_STATE;

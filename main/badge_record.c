@@ -28,6 +28,10 @@ static const char *TAG = "badge_record";
 #define REC_STOP_TIMEOUT_MS 10000
 #define REC_CMD_START 1
 
+// 离线续录期间网络恢复后切回流式续传的重试间隔。
+// 太短会在服务端不可达时反复创建/销毁 HTTP 会话,太长则白白消耗离线缓存空间。
+#define REC_RESUME_INTERVAL_US (5 * 1000000)
+
 typedef enum {
     REC_PHASE_IDLE = 0,   // 空闲
     REC_PHASE_ACTIVE,     // 采集中(流式或文件)
@@ -47,6 +51,8 @@ static volatile bool s_start_req;    // 启动请求的期望落点(在线流式
 static int64_t s_start_us;
 static uint32_t s_duration_ms;
 static esp_err_t s_last_result = ESP_OK;
+static int64_t s_resume_try_us;   // 上次尝试切回流式的时间点
+static bool s_resume_pending;     // 已发起切回流式,正在等待连接建立
 
 // 从流式切换到离线缓存:作废当前会话(服务器记为不完整),后续数据写文件。
 // 切换失败返回 false(缓存不可用或建文件失败),调用方结束录音并报错。
@@ -75,6 +81,8 @@ static void record_once(void)
     s_last_result = ESP_OK;
     s_start_us = esp_timer_get_time();
     s_duration_ms = 0;
+    s_resume_try_us = 0;
+    s_resume_pending = false;
 
     if (bsp_audio_init() != ESP_OK ||
         bsp_audio_set_format(BADGE_SAMPLE_RATE_HZ, BADGE_SAMPLE_BITS,
@@ -94,6 +102,7 @@ static void record_once(void)
             badge_store_open(name, sizeof(name), &w) != ESP_OK) {
             ESP_LOGE(TAG, "无网络且缓存不可用,放弃本次录音");
             s_last_result = ESP_ERR_NO_MEM;
+            bsp_audio_deinit();
             return;
         }
         have_file = true;
@@ -133,10 +142,42 @@ static void record_once(void)
                 }
                 have_file = true;
             }
-        } else if (badge_store_write(&w, buf, BADGE_CHUNK_SAMPLES * 2) != ESP_OK) {
-            ESP_LOGE(TAG, "缓存写入失败");
-            s_last_result = ESP_FAIL;
-            break;
+        } else {
+            // 离线续录期间若网络恢复,切回流式续传:当前缓存文件保留(由同步 worker
+            // 事后补传),否则断网会一直吃掉有限的离线缓存额度。
+            // 会话在后台建立,确认连上后才切,采集循环不阻塞,音频不丢。
+            int state = badge_upload_stream_state();
+            if (state == 2) {
+                if (badge_upload_stream_write(buf, BADGE_CHUNK_SAMPLES * 2) == ESP_OK) {
+                    badge_store_close(&w);
+                    have_file = false;
+                    s_streaming = true;
+                    s_resume_pending = false;
+                    ESP_LOGI(TAG, "网络恢复,切回流式续传");
+                    continue;
+                }
+                badge_upload_stream_end(true);   // 写入失败:作废本次尝试
+                s_resume_pending = false;
+            } else if (state == 1) {
+                // 连接中:继续写缓存,等下一次循环再判断。
+            } else {
+                if (s_resume_pending) {
+                    // 上次尝试的会话已自行退出:交还会话锁,进入冷却后重试。
+                    s_resume_pending = false;
+                    badge_upload_stream_end(true);
+                } else if (badge_wifi_net_up() &&
+                           esp_timer_get_time() - s_resume_try_us > REC_RESUME_INTERVAL_US) {
+                    s_resume_try_us = esp_timer_get_time();
+                    if (badge_upload_stream_begin() == ESP_OK) {
+                        s_resume_pending = true;
+                    }
+                }
+            }
+            if (badge_store_write(&w, buf, BADGE_CHUNK_SAMPLES * 2) != ESP_OK) {
+                ESP_LOGE(TAG, "缓存写入失败");
+                s_last_result = ESP_FAIL;
+                break;
+            }
         }
     }
 
@@ -145,6 +186,11 @@ static void record_once(void)
 
 finish:
     // 收尾:discard=true 丢弃全部数据;false 正常保存/送达。
+    if (s_resume_pending) {
+        // 还没切过去的候选会话:直接作废,避免会话锁残留导致下次无法建立流式。
+        badge_upload_stream_end(true);
+        s_resume_pending = false;
+    }
     if (s_streaming) {
         esp_err_t r = badge_upload_stream_end(s_discard_req);
         s_streaming = false;
@@ -158,6 +204,9 @@ finish:
             badge_store_delete(name);
         }
     }
+    // 录音结束即释放 codec 与 I2S 通道(约十几 KB):配网启动 BLE 与 HTTP 上传
+    // 都依赖大块连续堆,不释放会导致 NimBLE 启动后余量不足。
+    bsp_audio_deinit();
 }
 
 static void record_task(void *arg)
@@ -178,6 +227,19 @@ static void record_task(void *arg)
         xSemaphoreGive(s_lock);
         xSemaphoreGive(s_done);
     }
+}
+
+esp_err_t badge_record_init(void)
+{
+    if (s_lock) {
+        return ESP_OK;
+    }
+    s_lock = xSemaphoreCreateMutex();
+    if (!s_lock) {
+        ESP_LOGE(TAG, "录音互斥锁创建失败");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
 }
 
 esp_err_t badge_record_start(bool streaming)

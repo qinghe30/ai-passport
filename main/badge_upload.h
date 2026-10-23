@@ -33,3 +33,7 @@ esp_err_t badge_upload_stream_end(bool discard);
 
 // 最近一次流式会话是否完整送达(仅 end 成功后有意义)。
 bool badge_upload_stream_delivered(void);
+
+// 会话状态:0 无会话,1 连接中,2 已连接(可写入)。
+// 断网恢复后切回流式时先看本状态,确认连上再切,避免把音频写进连不上的会话。
+int badge_upload_stream_state(void);

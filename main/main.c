@@ -15,6 +15,7 @@
 #include "badge_wifi.h"
 #include "badge_store.h"
 #include "badge_upload.h"
+#include "badge_record.h"
 #include "key_guard.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -168,6 +169,9 @@ void app_main(void) {
     }
     if (badge_upload_init() != ESP_OK) {
         ESP_LOGW(TAG, "同步服务启动失败,任务列表可能无法刷新");
+    }
+    if (badge_record_init() != ESP_OK) {
+        ESP_LOGE(TAG, "录音模块初始化失败,按键将无法开始录音");
     }
 
     // UI 最后启动(内部持 LVGL 锁建页 + 启动 500ms 周期刷新定时器)。

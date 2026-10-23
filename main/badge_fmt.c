@@ -1,6 +1,8 @@
 // main/badge_fmt.c —— 纯文本格式化工具实现。
 #include "badge_fmt.h"
 
+#include <stdio.h>
+
 void badge_fmt_duration(uint32_t ms, char *buf, size_t size)
 {
     if (!buf || size < 6) return;
@@ -8,8 +10,10 @@ void badge_fmt_duration(uint32_t ms, char *buf, size_t size)
     uint32_t minutes = total_sec / 60;
     uint32_t seconds = total_sec % 60;
     if (minutes > 99) {
-        minutes = 99;
-        seconds = 59;
+        // 长会议录音需要显示真实时长:超过 99 分钟改用 H:MM:SS,不再封顶。
+        snprintf(buf, size, "%u:%02u:%02u", (unsigned)(minutes / 60),
+                 (unsigned)(minutes % 60), (unsigned)seconds);
+        return;
     }
     buf[0] = (char)('0' + minutes / 10);
     buf[1] = (char)('0' + minutes % 10);

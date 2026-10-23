@@ -25,8 +25,9 @@ CONFIG_LV_DEF_REFR_PERIOD=20
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 # LVGL 内置 malloc 池大小(KB)。它是独立静态区、不与系统堆共享,配大了会白白占用 RAM。
-# 数字工牌四页面 UI(含页面切换缓存)较 demo 复杂,48KB。
-CONFIG_LV_MEM_SIZE_KILOBYTES=48
+# 四页面 UI 实测峰值约 14KB(启动后 LVGL 内存监控打印),32KB 留足余量;
+# 剩下的 RAM 要给 BluFi/NimBLE 的 BTC 任务和 BLE 控制器(否则配网时内存不足会断言重启)。
+CONFIG_LV_MEM_SIZE_KILOBYTES=32
 # badge 16px 字体的 fallback:超出 GB2312 一级字库的字符回落到内置 16px 拉丁字体。
 CONFIG_LV_FONT_MONTSERRAT_16=y
 # 任务标题/负责人等动态文案为 UTF-8 中文字符串。
@@ -46,6 +47,12 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
 CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
 CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY=n
 CONFIG_BT_NIMBLE_NVS_PERSIST=n
+# 内存优化:BLE 控制器每个活动实例约 828 字节(默认 6 个);配网需 2 个
+# (广播 + 连接),设 1 会导致开广播时控制器返回 BLE_ERR_MEM_CAPACITY(0x207),
+# 与 IDF examples/bluetooth/blufi 的 sdkconfig.defaults.mini 一致取 2。
+# NimBLE 主机 ACL 缓冲默认 24 个,BluFi 只传小包,12 个足够。C3 无 PSRAM,必须省。
+CONFIG_BT_CTRL_BLE_MAX_ACT=2
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=12
 
 # --- BluFi 配网 ---
 # badge_wifi 经 BluFi(EspBlufi 小程序)接收 Wi-Fi 凭据;安全方案 0/1 由

@@ -7,17 +7,19 @@
 
 static void test_duration_basic(void)
 {
-    char buf[8];
+    char buf[16];
     badge_fmt_duration(0, buf, sizeof(buf));
     assert(strcmp(buf, "00:00") == 0);
     badge_fmt_duration(59000, buf, sizeof(buf));
     assert(strcmp(buf, "00:59") == 0);
     badge_fmt_duration(61000, buf, sizeof(buf));
     assert(strcmp(buf, "01:01") == 0);
+    badge_fmt_duration(99UL * 60UL * 1000UL + 59000UL, buf, sizeof(buf));
+    assert(strcmp(buf, "99:59") == 0);           // 100 分钟以内仍是 MM:SS
     badge_fmt_duration(100UL * 60UL * 1000UL, buf, sizeof(buf));
-    assert(strcmp(buf, "100:00") != 0);          // 超界封顶,不是 100 分钟
+    assert(strcmp(buf, "1:40:00") == 0);         // 超过 99 分钟改用 H:MM:SS
     badge_fmt_duration(600UL * 60UL * 1000UL, buf, sizeof(buf));
-    assert(strcmp(buf, "99:59") == 0);           // 封顶 99:59
+    assert(strcmp(buf, "10:00:00") == 0);
     printf("ok: duration formatting\n");
 }
 

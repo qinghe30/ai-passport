@@ -9,6 +9,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+// 初始化录音模块(创建内部互斥锁)。须在其他 badge_record_* 调用之前执行一次。
+esp_err_t badge_record_init(void);
+
 // 启动一次录音。streaming=true 且后台可达时实时上传,否则写离线缓存。
 // 返回错误表示无法启动(音频初始化失败等)。
 esp_err_t badge_record_start(bool streaming);

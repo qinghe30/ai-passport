@@ -1,7 +1,8 @@
 # Name,   Type, SubType, Offset,   Size,     Flags
-# 数字工牌布局:factory 6.25MB(含中文 UI 字体),storage 1.6875MB FAT 用于
-# 离线录音缓存(16kHz/16bit/单声道约 52 秒 PCM),两分区恰好铺满 8MB Flash。
+# 数字工牌布局:factory 3.25MB(应用镜像约 2.18MB,含中文 UI 字体),
+# storage 4.6875MB FAT 用于离线录音缓存(16kHz/16bit/单声道约 150 秒 PCM),
+# 两分区恰好铺满 8MB Flash。改本表需要同时刷写分区表(bootloader 之后的 0x8000)。
 nvs,      data, nvs,     0x9000,   0x6000,
 phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x640000,
-storage,  data, fat,     0x650000, 0x1b0000,
+factory,  app,  factory, 0x10000,  0x340000,
+storage,  data, fat,     0x350000, 0x4b0000,

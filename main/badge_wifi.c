@@ -14,6 +14,7 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_wifi_default.h"
@@ -159,6 +160,8 @@ static void blufi_reset(int reason)
 static void blufi_sync(void)
 {
     int rc = esp_blufi_profile_init();
+    ESP_LOGI(TAG, "blufi_sync: profile_init rc=%d, 空闲堆 %u 字节",
+             rc, (unsigned)esp_get_free_heap_size());
     if (rc == 0) {
         s_wifi.profile_initialized = true;
     } else if (s_wifi.state == BADGE_WIFI_PROVISIONING) {
@@ -193,11 +196,15 @@ static void request_wifi_connect(void)
 
 static void blufi_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *param)
 {
+    // 诊断:打印所有 BluFi 事件,便于确认小程序连接与配网数据传输。
+    ESP_LOGI(TAG, "BLUFI 事件: %d", (int)event);
     switch (event) {
     case ESP_BLUFI_EVENT_INIT_FINISH:
+        ESP_LOGI(TAG, "BLUFI 初始化完成,开始广播 %s", BADGE_BLE_NAME);
         esp_blufi_adv_start_with_name(BADGE_BLE_NAME);
         break;
     case ESP_BLUFI_EVENT_BLE_CONNECT:
+        ESP_LOGI(TAG, "BLUFI 手机已连接");
         s_wifi.ble_connected = true;
         esp_blufi_adv_stop();
         if (badge_blufi_security_init() != 0) {
@@ -305,6 +312,9 @@ esp_err_t badge_wifi_init(void)
     if (err == ESP_OK) err = esp_wifi_set_mode(WIFI_MODE_STA);
     if (err == ESP_OK) err = esp_wifi_start();
     if (err == ESP_OK) {
+        // 关闭 Wi-Fi 省电:省电模式下收发要等 DTIM 唤醒,录音期间 TCP 发送
+        // 会长时间等不到 ACK(实测发出约 6KB 后 send 卡死 10 秒)。
+        esp_wifi_set_ps(WIFI_PS_NONE);
         s_wifi.wifi_started = true;
         s_wifi.state = BADGE_WIFI_CONNECTING;   // STA_START 事件里会修正实际状态
     } else {
@@ -352,9 +362,15 @@ esp_err_t badge_wifi_provisioning_start(void)
     if (!s_wifi.wifi_initialized) return ESP_ERR_INVALID_STATE;
     if (s_wifi.host_initialized) return ESP_OK;   // 已在配网中
 
+    // 诊断:C3 堆内存紧张,NimBLE host 启动前记录余量。
+    ESP_LOGI(TAG, "BLUFI 启动前空闲堆: %u 字节", (unsigned)esp_get_free_heap_size());
+
     esp_err_t err = esp_blufi_register_callbacks(&s_blufi_callbacks);
+    ESP_LOGI(TAG, "blufi 回调注册: %s", esp_err_to_name(err));
     if (err != ESP_OK) return err;
     err = nimble_port_init();
+    ESP_LOGI(TAG, "nimble_port_init: %s, 空闲堆 %u 字节",
+             esp_err_to_name(err), (unsigned)esp_get_free_heap_size());
     if (err != ESP_OK) return err;
     s_wifi.host_initialized = true;
     s_wifi.host_stopped = xSemaphoreCreateBinary();
@@ -363,13 +379,18 @@ esp_err_t badge_wifi_provisioning_start(void)
     ble_hs_cfg.sync_cb = blufi_sync;
     ble_hs_cfg.gatts_register_cb = esp_blufi_gatt_svr_register_cb;
     int rc = esp_blufi_gatt_svr_init();
+    ESP_LOGI(TAG, "gatt_svr_init rc=%d, 空闲堆 %u 字节",
+             rc, (unsigned)esp_get_free_heap_size());
     if (rc != 0) return ESP_FAIL;
     s_wifi.gatt_initialized = true;
     rc = ble_svc_gap_device_name_set(BADGE_BLE_NAME);
+    ESP_LOGI(TAG, "gap 设备名设置 rc=%d", rc);
     if (rc != 0) return ESP_FAIL;
     esp_blufi_btc_init();
     s_wifi.btc_initialized = true;
     err = esp_nimble_enable(host_task);
+    ESP_LOGI(TAG, "esp_nimble_enable: %s, 空闲堆 %u 字节",
+             esp_err_to_name(err), (unsigned)esp_get_free_heap_size());
     if (err == ESP_OK) {
         s_wifi.host_running = true;
         s_wifi.state = BADGE_WIFI_PROVISIONING;
@@ -392,6 +413,12 @@ esp_err_t badge_wifi_provisioning_stop(void)
         int rc = nimble_port_stop();
         if (rc == 0) {
             xSemaphoreTake(s_wifi.host_stopped, portMAX_DELAY);
+            host_stopped = true;
+        } else if (rc == BLE_HS_EALREADY) {
+            // 主机侧已处于停止状态(ble_hs 返回"已完成"),此前的 host 已不可用。
+            // 这里必须继续走 nimble_port_deinit,否则控制器保持初始化状态,
+            // 下次进入配网会报 controller init failed / ESP_ERR_INVALID_STATE。
+            ESP_LOGW(TAG, "nimble 主机已停止,直接反初始化");
             host_stopped = true;
         } else {
             ESP_LOGE(TAG, "nimble_port_stop 失败: %d", rc);
