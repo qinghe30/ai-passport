@@ -464,3 +464,29 @@ esp_err_t badge_wifi_clear_credentials(void)
     s_wifi.state = BADGE_WIFI_NO_CRED;
     return err;
 }
+
+esp_err_t badge_wifi_apply_credentials(const char *ssid, const char *password)
+{
+    if (!s_wifi.wifi_initialized) return ESP_ERR_INVALID_STATE;
+    if (!ssid || !ssid[0]) return ESP_ERR_INVALID_ARG;
+    if (strlen(ssid) >= sizeof(s_wifi.sta_config.sta.ssid)) return ESP_ERR_INVALID_ARG;
+
+    // 与 BluFi 写入路径保持同一套配置结构,阈值放到最低以兼容 WPA/WPA2/WPA3。
+    memset(&s_wifi.sta_config, 0, sizeof(s_wifi.sta_config));
+    s_wifi.sta_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    memcpy(s_wifi.sta_config.sta.ssid, ssid, strlen(ssid));
+    if (password && password[0]) {
+        if (strlen(password) >= sizeof(s_wifi.sta_config.sta.password)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        memcpy(s_wifi.sta_config.sta.password, password, strlen(password));
+    }
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &s_wifi.sta_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "写入 Wi-Fi 凭据失败: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "已写入 Wi-Fi 凭据, SSID=%s", ssid);
+    request_wifi_connect();
+    return ESP_OK;
+}

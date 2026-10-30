@@ -6,6 +6,7 @@
 
 #include "badge_config.h"
 #include "badge_fmt.h"
+#include "badge_settings.h"
 #include "badge_store.h"
 #include "badge_tasks.h"
 #include "badge_wifi.h"
@@ -85,7 +86,7 @@ static void tasks_fetch_once(void)
 {
     char url[160];
     snprintf(url, sizeof(url), "%s/api/badge/tasks?device=%s",
-             BADGE_SERVER_URL, s_up.device_id);
+             badge_settings_server_url(), s_up.device_id);
 
     esp_http_client_config_t cfg = {
         .url = url,
@@ -179,7 +180,7 @@ static esp_err_t replay_one_file(const char *name, size_t bytes)
     if (err != ESP_OK) return err;
 
     char url[160];
-    snprintf(url, sizeof(url), "%s/api/recordings/stream", BADGE_SERVER_URL);
+    snprintf(url, sizeof(url), "%s/api/recordings/stream", badge_settings_server_url());
     esp_http_client_config_t cfg = {
         .url = url,
         .timeout_ms = HTTP_TIMEOUT_MS,
@@ -273,7 +274,7 @@ static int replay_pending_files(void)
 
 static void stream_url(char *buf, unsigned size)
 {
-    snprintf(buf, size, "%s/api/recordings/stream", BADGE_SERVER_URL);
+    snprintf(buf, size, "%s/api/recordings/stream", badge_settings_server_url());
 }
 
 // 写一个 HTTP 分块(chunked)帧:<十六进制长度>\r\n<数据>\r\n。

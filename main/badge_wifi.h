@@ -44,3 +44,7 @@ esp_err_t badge_wifi_provisioning_stop(void);
 
 // 清除已保存凭据并断开连接(配网页长按触发的"重置网络"入口)。
 esp_err_t badge_wifi_clear_credentials(void);
+
+// 写入新的 Wi-Fi 凭据并立即发起连接(WIFI_STORAGE_FLASH 会同时持久化到 NVS)。
+// 供配置网页提交表单时使用;password 为空表示开放网络。
+esp_err_t badge_wifi_apply_credentials(const char *ssid, const char *password);

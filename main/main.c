@@ -12,6 +12,7 @@
 #include "bsp_battery.h"
 #include "bsp_pins.h"      // 错误日志里要打印 BSP_LCD_* 引脚号
 #include "badge_ui.h"
+#include "badge_settings.h"
 #include "badge_wifi.h"
 #include "badge_store.h"
 #include "badge_upload.h"
@@ -164,6 +165,8 @@ void app_main(void) {
     if (badge_wifi_init() != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi 服务初始化失败,请通过配网页重新配网");
     }
+    // NVS 已由 badge_wifi_init 准备好,这里读出配置网页保存的后台地址。
+    badge_settings_init();
     if (badge_store_init() != ESP_OK) {
         ESP_LOGW(TAG, "离线缓存不可用,录音仅支持在线流式上传");
     }

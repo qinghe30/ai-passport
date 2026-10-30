@@ -13,7 +13,7 @@ idf_component_register(
          "demo_low_power.c"
     INCLUDE_DIRS "."
     REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
-             fatfs wear_levelling esp_http_client json
+             fatfs wear_levelling esp_http_client esp_http_server json
     PRIV_REQUIRES mbedtls efuse
 )
 
@@ -23,6 +23,8 @@ target_sources(${COMPONENT_LIB} PRIVATE
     "badge_fmt.c"
     "badge_blufi_security.c"
     "badge_wifi.c"
+    "badge_settings.c"
+    "badge_setup.c"
     "badge_store.c"
     "badge_tasks.c"
     "badge_upload.c"

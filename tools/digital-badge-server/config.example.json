@@ -1,0 +1,18 @@
+{
+  "port": 8000,
+  "host": "0.0.0.0",
+  "feishu_webhook": "",
+  "feishu_app_id": "",
+  "feishu_app_secret": "",
+  "feishu_chat_id": "",
+  "feishu_base_app_token": "",
+  "feishu_base_table_id": "",
+  "asr_provider": "bailian",
+  "asr_base_url": "https://api.openai.com/v1",
+  "asr_api_key": "",
+  "asr_model": "whisper-1",
+  "bailian_asr_model": "paraformer-v2",
+  "llm_base_url": "https://api.openai.com/v1",
+  "llm_api_key": "",
+  "llm_model": "deepseek-v4.1-flash"
+}

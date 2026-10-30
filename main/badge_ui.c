@@ -17,6 +17,7 @@
 #include "badge_config.h"
 #include "badge_state.h"
 #include "badge_fmt.h"
+#include "badge_setup.h"
 #include "badge_wifi.h"
 #include "badge_record.h"
 #include "badge_upload.h"
@@ -63,13 +64,17 @@ static const char *TAG = "badge_ui";
 #define T_PROV_TITLE   "Wi-Fi 配网"
 #define T_PROV_BACK    "长按 OK 返回"
 #define T_CONN_FMT     "已连接\nSSID: %s\nIP: %s"
-#define T_NO_CRED      "尚未配置 Wi-Fi\n请用微信小程序 EspBlufi\n搜索设备:\n"
+#define T_NO_CRED      "尚未配置 Wi-Fi"
 #define T_CONNECTING   "正在连接 Wi-Fi..."
-#define T_PROVISIONING "正在配网\n请用微信小程序 EspBlufi\n搜索设备:\n"
+#define T_PROVISIONING "配置热点已开启"
+#define T_AP_HINT      "手机连热点 %s\n打开 192.168.4.1"
 #define T_WIFI_ERROR   "网络异常,请重试"
 #define T_WIFI_IDLE    "网络未启动"
 #define T_PENDING_FMT  "%d 条待办"
 #define T_PROV_FAIL    "配网启动失败"
+
+// 任务列表单次滚动步长(像素),约一行任务的高度。
+#define TASK_SCROLL_STEP 48
 
 // 中文字体(生成于 assets/fonts,fallback 到 montserrat 提供 LV_SYMBOL_* 图标)。
 LV_FONT_DECLARE(badge_font_16);
@@ -92,6 +97,7 @@ static lv_obj_t *s_tasks_list;       // 任务行容器(可滚动)
 static lv_obj_t *s_tasks_empty;      // 空态提示
 static lv_obj_t *s_tasks_sync;       // "上次同步: xx"
 static lv_obj_t *s_prov_info;        // 配网信息(多行)
+static lv_obj_t *s_prov_ap;          // 配网页:热点名称与配置地址提示
 
 static badge_model_t s_model;
 static lv_timer_t *s_poller;
@@ -306,6 +312,18 @@ static void render_tasks(void)
     for (int i = 0; i < n; i++) {
         task_row(s_tasks_list, &snap[i]);
     }
+    // 重建后回到顶部,避免残留上次的滚动位置。
+    lv_obj_scroll_to_y(s_tasks_list, 0, LV_ANIM_OFF);
+}
+
+// 任务页内滚动待办列表。dir<0 向上滚,dir>0 向下滚。
+// 用 bounded 版本:到达列表首尾自动停住,不会无限滚动。
+static void scroll_tasks(int dir)
+{
+    if (!s_tasks_list) {
+        return;
+    }
+    lv_obj_scroll_by_bounded(s_tasks_list, 0, dir * TASK_SCROLL_STEP, LV_ANIM_OFF);
 }
 
 static void render_sync_age(void)
@@ -359,6 +377,9 @@ static void build_tasks(void)
     lv_obj_set_style_layout(s_tasks_list, LV_LAYOUT_FLEX, 0);
     lv_obj_set_flex_flow(s_tasks_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_tasks_list, 6, 0);
+    // 任务页内 UP/DOWN 滚动查看全部待办,垂直方向滚动并显示滚动条。
+    lv_obj_set_scroll_dir(s_tasks_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_tasks_list, LV_SCROLLBAR_MODE_AUTO);
 
     s_tasks_empty = make_label(s_screens[i], &s_f16, C_SUB, T_TASKS_EMPTY);
     lv_obj_set_style_text_align(s_tasks_empty, LV_TEXT_ALIGN_CENTER, 0);
@@ -389,6 +410,13 @@ static void build_provision(void)
     lv_obj_set_style_text_align(s_prov_info, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_prov_info, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_prov_info, lv_pct(84));
+
+    // 热点名称与配置地址:配网页的入口说明,不随网络状态变色。
+    s_prov_ap = make_label(s_screens[i], &s_f16, C_SUB, "");
+    lv_obj_set_style_text_align(s_prov_ap, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(s_prov_ap, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_prov_ap, lv_pct(84));
+    lv_obj_align(s_prov_ap, LV_ALIGN_TOP_MID, 0, 176);
 
     lv_obj_t *back = make_label(s_screens[i], &s_f16, C_SUB, T_PROV_BACK);
     lv_obj_set_style_text_align(back, LV_TEXT_ALIGN_CENTER, 0);
@@ -441,11 +469,9 @@ static void refresh_provision(void)
 {
     char ssid[33];
     char ip[16];
-    char name[40];
+    char ap[24];
     char buf[160];
     lv_color_t color = C_TEXT;
-
-    snprintf(name, sizeof(name), "%s", BADGE_BLE_NAME);
 
     switch (badge_wifi_state()) {
     case BADGE_WIFI_CONNECTED:
@@ -459,10 +485,11 @@ static void refresh_provision(void)
         color = C_AMBER;
         break;
     case BADGE_WIFI_PROVISIONING:
-        snprintf(buf, sizeof(buf), T_PROVISIONING "%s", name);
+        // 当前配网页走 SoftAP,该状态只在此前遗留的 BluFi 实现里出现。
+        snprintf(buf, sizeof(buf), T_PROVISIONING);
         break;
     case BADGE_WIFI_NO_CRED:
-        snprintf(buf, sizeof(buf), T_NO_CRED "%s", name);
+        snprintf(buf, sizeof(buf), T_NO_CRED);
         color = C_AMBER;
         break;
     case BADGE_WIFI_ERROR:
@@ -477,6 +504,10 @@ static void refresh_provision(void)
     lv_obj_set_style_text_color(s_prov_info, color, 0);
     lv_label_set_text(s_prov_info, buf);
     lv_obj_align(s_prov_info, LV_ALIGN_TOP_MID, 0, 100);
+
+    badge_setup_ap_ssid(ap, sizeof(ap));
+    snprintf(buf, sizeof(buf), T_AP_HINT, ap);
+    lv_label_set_text(s_prov_ap, buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -632,6 +663,14 @@ void badge_ui_key(bsp_btn_t btn, bsp_btn_ev_t ev)
     if (!bsp_lvgl_lock(1000)) {
         return;
     }
+    // 任务页内 UP/DOWN 用于滚动待办列表,不走状态机(不切换页面)。
+    if (s_model.page == BADGE_PAGE_TASKS &&
+        (event == BADGE_EV_KEY_UP_CLICK || event == BADGE_EV_KEY_DOWN_CLICK)) {
+        // UP 让文字向下移动(看更早的条目),DOWN 让文字向上移动(看更晚的条目)。
+        scroll_tasks(event == BADGE_EV_KEY_UP_CLICK ? 1 : -1);
+        bsp_lvgl_unlock();
+        return;
+    }
     prev_page = s_model.page;
     changed = badge_model_handle(&s_model, event, &action);
     if (changed) {
@@ -648,11 +687,11 @@ void badge_ui_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         return;
     }
 
-    // 页面进入/离开配网模式(BLE 启停较慢,在锁外执行)。
+    // 页面进入/离开配置热点(启动 httpd 与热点较慢,在锁外执行)。
     if (s_model.page == BADGE_PAGE_PROVISION && prev_page != BADGE_PAGE_PROVISION) {
-        ESP_LOGI(TAG, "进入配网页,启动 BluFi 蓝牙");
-        esp_err_t perr = badge_wifi_provisioning_start();
-        ESP_LOGI(TAG, "BluFi 启动结果: %s", esp_err_to_name(perr));
+        ESP_LOGI(TAG, "进入配网页,启动配置热点");
+        esp_err_t perr = badge_setup_start();
+        ESP_LOGI(TAG, "配置热点启动结果: %s", esp_err_to_name(perr));
         if (perr != ESP_OK) {
             if (bsp_lvgl_lock(500)) {
                 toast(BADGE_PAGE_PROVISION, T_PROV_FAIL);
@@ -661,7 +700,7 @@ void badge_ui_key(bsp_btn_t btn, bsp_btn_ev_t ev)
         }
     } else if (s_model.page != BADGE_PAGE_PROVISION &&
                prev_page == BADGE_PAGE_PROVISION) {
-        badge_wifi_provisioning_stop();
+        badge_setup_stop();
     }
 
     switch (action) {

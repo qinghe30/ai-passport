@@ -2,11 +2,15 @@
 // 部署时按现场环境修改本文件后重新编译固件。
 #pragma once
 
-// 演示后台地址(接收录音上传与提供任务摘要)。
-// 部署时改为运行 badge-backend 的电脑局域网 IP,例如 "http://192.168.1.100:8000"。
-#define BADGE_SERVER_URL "http://192.168.3.101:8000"
+// 后台地址的出厂默认值(接收录音上传与提供任务摘要)。
+// 实际值在运行时读取 NVS:配网页(热点 FoloBadge-XXXX 的 192.168.4.1)里填写后
+// 覆盖本默认值,见 badge_settings.c。这里只在从未配置过时生效。
+#define BADGE_SERVER_URL "http://192.168.1.100:8000"
 
-// 设备蓝牙配网广播名。微信小程序 EspBlufi 默认只显示以 "BLUFI" 开头的设备。
+// 配置热点名称前缀。完整热点名为 "前缀-XXXX"(XXXX 取 MAC 后两字节)。
+#define BADGE_AP_PREFIX "FoloBadge"
+
+// 设备蓝牙配网广播名(保留的 BluFi 配网实现使用;当前配网页走 SoftAP)。
 #define BADGE_BLE_NAME "BLUFI_FoloBadge"
 
 // 录音格式:16 kHz / 16 bit / 单声道(32 KB/s,与演示后台约定一致)。
