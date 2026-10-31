@@ -11,8 +11,8 @@
                                 status != "done" 视为工牌侧待办;最多返回 8 条。
 
 浏览器管理页(演示用):
-  GET  /tasks       任务管理:确认/编辑标题/负责人/截止时间/状态,手动新建
   GET  /recordings  录音与沟通分析结果浏览
+  GET  /config      网页填写百炼密钥与飞书凭据,保存进 config.json(重启后台生效)
 
 配置(config.json,与本文件同目录,缺省项用内置默认值):
   port             监听端口(固件 BADGE_SERVER_URL 需指向本机 IP + 此端口)
@@ -63,6 +63,27 @@ DEFAULT_CONFIG = {
     "llm_model": "gpt-4o-mini", # 百炼模式下自动换成 glm-5.3
 }
 CONFIG = dict(DEFAULT_CONFIG)
+
+# 配置页表单字段:(config.json 键, 显示标签, 是否密文, 填写说明)。
+# 密文字段留空表示保持原值,避免每次保存都要重新输入密钥。
+CONFIG_FIELDS = [
+    ("asr_api_key", "百炼 / 转写 API Key", True,
+     "阿里云百炼 Key,转写与分析共用;留空则走模拟转写。"),
+    ("llm_api_key", "LLM API Key", True,
+     "填同一个百炼 Key 即可;留空则走模拟分析。"),
+    ("feishu_app_id", "飞书 App ID", False,
+     "飞书自建应用的 App ID,用于在群里推送纪要卡片。"),
+    ("feishu_app_secret", "飞书 App Secret", True,
+     "飞书自建应用的 App Secret。"),
+    ("feishu_chat_id", "飞书群 chat_id", False,
+     "留空则自动取机器人所在的第一个群。"),
+    ("feishu_base_app_token", "多维表格 app_token", False,
+     "任务库所在多维表格的 app_token,用于认领与指派。"),
+    ("feishu_base_table_id", "多维表格 table_id", False,
+     "任务库数据表的 table_id。"),
+    ("feishu_webhook", "飞书群 Webhook", False,
+     "只用群机器人 Webhook 推送时可填这一项。"),
+]
 
 
 # --------------------------------------------------------------------------
@@ -1330,6 +1351,12 @@ button.green{background:#2fa84f}
 .kp{margin:4px 0 4px 18px;font-size:14px}
 .bar{margin:12px 0}
 .bar a{color:#2f6fed}
+.form{background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:18px 22px;max-width:640px}
+.form .row{margin-bottom:14px}
+.form label{display:block;font-size:13px;color:#4a5568;margin-bottom:4px}
+.form input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d9dee7;border-radius:6px}
+.form .hint{font-size:12px;color:#8895a7;margin-top:4px}
+.notice{background:#fff8e6;border-left:4px solid #e6a23c;padding:10px 14px;font-size:13px;margin-bottom:14px;max-width:640px}
 """
 
 class Handler(BaseHTTPRequestHandler):
@@ -1521,9 +1548,87 @@ class Handler(BaseHTTPRequestHandler):
                     tasks_links))
         html = """<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <title>数字工牌 - 沟通记录</title><style>%s</style></head><body>
-<header><h1>数字工牌后台</h1><a href="/recordings">沟通记录</a></header>
+<header><h1>数字工牌后台</h1><a href="/recordings">沟通记录</a><a href="/config">配置</a></header>
 <main>%s</main></body></html>""" % (PAGE_CSS, "\n".join(cards) or "<div class='card'>暂无记录</div>")
         self.send_html(html)
+
+    # ---- 管理页:配置(百炼密钥与飞书凭据) ----
+
+    def page_config(self, saved=0, error=""):
+        rows = []
+        for key, label, secret, hint in CONFIG_FIELDS:
+            current = CONFIG.get(key) or ""
+            if secret:
+                # 密文不回显:已设置时只提示"留空保持不变"。
+                value = ""
+                placeholder = "已设置,留空则保持不变" if current else "未设置"
+                input_type = "password"
+            else:
+                value = html_escape(str(current))
+                placeholder = "" if current else "未设置"
+                input_type = "text"
+            rows.append(
+                "<div class='row'><label>%s</label>"
+                "<input name='%s' type='%s' value='%s' placeholder='%s'"
+                " autocomplete='off' spellcheck='false'>"
+                "<div class='hint'>%s</div></div>" % (
+                    label, key, input_type, value, placeholder, hint))
+
+        if error:
+            notice = "<div class='notice'>%s</div>" % error
+        elif saved:
+            notice = ("<div class='notice'>已保存 %d 项配置。请关闭后台窗口,"
+                      "重新运行 run_server.bat 后生效。</div>" % saved)
+        else:
+            notice = ""
+
+        self.send_html("""<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
+<title>数字工牌 - 配置</title><style>%s</style></head><body>
+<header><h1>数字工牌后台</h1><a href="/recordings">沟通记录</a><a href="/config">配置</a></header>
+<main>%s<form class="form" method="post" action="/config">%s
+<div class="bar"><button type="submit">保存配置</button></div></form></main>
+</body></html>""" % (PAGE_CSS, notice, "".join(rows)))
+
+    def handle_config_save(self):
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        body = self.rfile.read(length) if length else b""
+        values = parse_qs(body.decode("utf-8", "ignore"), keep_blank_values=True)
+        changed = []
+        changed_keys = []
+        for key, label, secret, _ in CONFIG_FIELDS:
+            value = (values.get(key, [""])[0] or "").strip()
+            if secret and not value:
+                continue   # 密文留空表示保持原值
+            if (CONFIG.get(key) or "") == value:
+                continue
+            CONFIG[key] = value
+            changed.append(label)
+            changed_keys.append(key)
+        if not changed:
+            self.page_config(error="没有需要保存的改动。")
+            return
+
+        # 在现有 config.json 基础上只更新用户改动的项,
+        # 避免把环境变量里的密钥等运行时值顺手落盘。
+        payload = dict(DEFAULT_CONFIG)
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            payload.update({k: v for k, v in existing.items() if k in DEFAULT_CONFIG})
+        for key in changed_keys:
+            payload[key] = CONFIG[key]
+        temporary = CONFIG_PATH + ".tmp"
+        try:
+            with open(temporary, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            os.replace(temporary, CONFIG_PATH)
+        except OSError as e:
+            # 文件被占用或只读时在页面上给明确提示。
+            print("[config] 写入 config.json 失败: %s" % e)
+            self.page_config(error="写入 config.json 失败,请确认文件未被占用或只读。")
+            return
+        print("[config] 已更新 %d 项配置: %s" % (len(changed), "、".join(changed)))
+        self.page_config(saved=len(changed))
 
     # ---- 路由 ----
 
@@ -1534,6 +1639,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_tasks_api(query)
         elif parsed.path in ("/", "/recordings"):
             self.page_recordings()
+        elif parsed.path == "/config":
+            self.page_config()
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -1542,16 +1649,21 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/recordings/stream":
             self.handle_stream_upload(parse_qs(parsed.query))
             return
+        if parsed.path == "/config":
+            self.handle_config_save()
+            return
         if parsed.path == "/api/debug/test_card":
-            # 调试入口:建 4 条测试待办并推送纪要卡片,验证认领/误提交互。
+            # 调试入口:建 4 条通用测试待办并推送纪要卡片,验证认领/误提交互。
+            # 截止日期按运行当天顺延,避免写死后过期。
             todos = [
-                ("[测试] 整理客户对中东航线舱位保障的三点顾虑并发给客户", "我", "2026-10-29"),
-                ("[测试] 向操作团队确认杰贝阿里港本周现舱情况", "我", "2026-10-29"),
-                ("[测试] 客户提供现有供应商的合作价格区间", "客户", "2026-10-31"),
-                ("[测试] 约定下周三上门演示 SOP 与舱位保障方案", "双方", "2026-11-02"),
+                ("[测试] 确认本周样品寄出时间并通知对接人", "我", 1),
+                ("[测试] 整理上次沟通的三点结论并发给对方", "我", 1),
+                ("[测试] 对方提供现有的报价区间", "对方", 3),
+                ("[测试] 约定下周上门演示的时间", "双方", 5),
             ]
             task_records = []
-            for title, assignee, due in todos:
+            for title, assignee, due_days in todos:
+                due = (date.today() + timedelta(days=due_days)).isoformat()
                 no, rid = base_create_task(title, assignee, due, "TESTCARD")
                 task_records.append({"no": no, "title": clip_title(title),
                                      "assignee": assignee, "due": due,

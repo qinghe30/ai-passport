@@ -20,8 +20,10 @@
 
 四、启动后台
   1. 双击 server/run_server.bat,窗口第一屏会打印本机地址,例如 http://192.168.1.100:8000。
-  2. 首次运行自动生成 config.json:填入 asr_api_key 与 llm_api_key(填写同一个百炼 Key),
-     需要在飞书群收纪要时再填 feishu_ 开头的四项。
+  2. 用浏览器打开 http://本机IP:8000/config,在网页上填写配置:
+     asr_api_key 与 llm_api_key 填同一个百炼 Key;需要在飞书群收纪要时再填
+     feishu_app_id、feishu_app_secret、feishu_base_app_token、feishu_base_table_id。
+     点"保存配置"后关闭窗口,重新运行 run_server.bat 生效。也可以直接编辑 config.json。
   3. 浏览器打开 http://本机IP:8000/recordings 可查看录音、纪要、待办与销售评分。
 
 五、配置工牌
@@ -37,5 +39,14 @@
 
 七、常见问题
   - 任务页一直显示"暂无任务":确认后台地址填对(端口 8000),并放行电脑 8000 端口防火墙。
-  - 录音后没有纪要:确认 config.json 里的密钥有效,后台窗口会打印失败原因。
+  - 待机页显示"待同步 N 条":表示录音还缓存在工牌本地,没有传到后台。工牌不直连飞书,
+    链路是 工牌 -> 电脑上的 badge_server -> 飞书,所以待同步时飞书自然也收不到。依次检查:
+    1) 配网页 192.168.4.1 里的"后台地址"要填运行 badge_server 的电脑局域网地址加 8000 端口,
+       例如 http://192.168.1.100:8000;只填 Wi-Fi 不填后台地址会一直待同步。
+    2) 电脑上 run_server.bat 窗口保持打开,浏览器能打开 http://本机IP:8000/recordings 看到录音。
+    3) 工牌与电脑连同一个 2.4G Wi-Fi(不支持 5G,也不要连访客或带隔离的网络),并放行 8000 端口。
+    4) 飞书要单独配置:在 http://本机IP:8000/config 页填 feishu_app_id、feishu_app_secret、
+       feishu_base_app_token、feishu_base_table_id,不填则录音只留在后台网页,不会推到飞书群。
+    地址改对后工牌会自动补传;长时间不动可重启一次工牌再观察。
+  - 录音后没有纪要:确认 http://本机IP:8000/config 页里的密钥有效,后台窗口会打印失败原因。
   - 转写返回无有效语音:录音过短或环境无人声,重新录一段再试。
